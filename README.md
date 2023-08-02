@@ -20,9 +20,12 @@ Refer to argparse part of `separate_from_folder.py` to see all arguments.
 - `--two-stems` Only separate audio into {STEM} and no_{STEM}. ({STEM} candidate : `vocals`, `drums`, `bass`, `others`) If `inst` only no_vocal will be saved.
 - `--mp3` Output file format will be mp3 format.
 - `--filename` ~~Set the name of output file. Use `{track}`, `{trackext}`, `{stem}`, `{ext}` to use variables of track name without extension, track extension, stem name and default output file extension. Default is `{track}/{stem}.{ext}`.~~ As using inputs from a folder, output file name will be the same with input file name, but saved in `--out` directory. If there is any sub-directories between `path/to/input/audio/files` and actual audio files(since this code is using `librosa.glob(**/*.*)` so files in subfolders are also detectable), the sub-directory hierarchy system will be applied the same to `--out` directory, too.
-#### Also as mentioned in `-sr --sample_rate`, output sample rate modifying is added.
-#### `inst` option for `--two-stems` is also an added feature. (Separating only instrumental track)
 
+### Other added features
+- Also as mentioned in `-sr --sample_rate`, output sample rate modifying is added.
+- `inst` option for `--two-stems` is also an added feature. (Separating only instrumental track)
+- When some files in `path/to/input/audio/files` are already separated and saved in `--out` directory, they are automatically excluded from the calculation. So don't worry if you are restarting the process!
+- - -
 # Demucs Music Source Separation
 [![Support Ukraine](https://img.shields.io/badge/Support-Ukraine-FFD500?style=flat&labelColor=005BBB)](https://opensource.fb.com/support-ukraine)
 ![tests badge](https://github.com/facebookresearch/demucs/workflows/tests/badge.svg)
