@@ -11,16 +11,6 @@ def batch(iterable, n=1):
     for ndx in range(0, l, n):
         yield iterable[ndx:min(ndx + n, l)]
 
-def get_size(file_path, unit='kb'):
-    file_size = os.path.getsize(file_path)
-    exponents_map = {'bytes': 0, 'kb': 1, 'mb': 2, 'gb': 3}
-    if unit not in exponents_map:
-        raise ValueError("Must select from \
-        ['bytes', 'kb', 'mb', 'gb']")
-    else:
-        size = file_size / 1024 ** exponents_map[unit]
-        return round(size, 3)
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("input_path", type=Path, help = "Input directory folder path")        
@@ -105,25 +95,27 @@ def main():
     parser.add_argument("--clip-mode", dest = "clip_mode", default="rescale", choices=["rescale", "clamp"],
                         help="Strategy for avoiding clipping: rescaling entire signal "
                              "if necessary  (rescale) or hard clipping (clamp).")
+    parser.add_argument("--drop_kb",
+                        default=180,
+                        type=int,
+                        help="Files with size under drop_kb will be omitted, for corrputed file omission.")
+    parser.add_argument("--num_worker",
+                        default=8,
+                        type=int,
+                        help="num_worker for DataLoader")
     args = parser.parse_args()
     
-    params = ["--two-stems", "inst", "--filename", args.filename,"--clip-mode", args.clip_mode,"-n", args.model_name, "--shifts", str(args.shifts), "--overlap", str(args.overlap), "--batching", "-d", args.device, "-c", str(args.input_path.parent), "--mp3-bitrate", str(args.mp3_bitrate), "--mp3-preset", str(args.mp3_preset), "-j", str(args.jobs), "-o", str(args.out), "-l", str(args.audiolength), "-sr", str(args.sample_rate)]
+    params = ["--filename", args.filename,"--num_worker", str(args.num_worker), "--drop_kb", str(args.drop_kb), "--clip-mode", args.clip_mode,"-n", args.model_name, "--shifts", str(args.shifts), "--overlap", str(args.overlap), "--n_batch", args.n_batch, "-d", args.device, "-c", str(args.input_path), "--mp3-bitrate", str(args.mp3_bitrate), "--mp3-preset", str(args.mp3_preset), "-j", str(args.jobs), "-o", str(args.out), "-l", str(args.audiolength), "-sr", str(args.sample_rate)]
     
 
     if args.mp3:
-        ext = "mp3"
         params.append("--mp3")
     elif args.flac:
-        ext = "flac"
         params.append("--flac")
-    else:
-        ext = "wav"
     
     if args.int24:
-        ext = "mp3"
         params.append("--int24")
     elif args.float32:
-        ext = "flac"
         params.append("--float32")
     
     if args.split == False :
@@ -133,22 +125,12 @@ def main():
         params.append("--two-stems")
         params.append(args.stem)
 
-    files = list(args.input_path.glob('**/*.*'))
-    print("Number of initially loaded files : ", len(files))
+    params.append(str(args.input_path))
 
-    ffiles = []
-    for file in tqdm(files):    
-        if (args.out / args.model_name / file.parent.relative_to(args.input_path) / (str(file.name.rsplit(".", 1)[0]) + '.' + ext)).exists() == False and get_size(file) > 180:
-            ffiles.append(file)
-    files = ffiles
-    print("Number of files which are not separated yet : ", len(files))
-
-    for b_file in tqdm(batch(files, args.n_batch)):
-        params_ = params + [str(file) for file in b_file]
-        if th.cuda.device_count() > 1:
-            demucs.separate_multigpu.main(params_)
-        else:
-            demucs.separate.main(params_)
+    if th.cuda.device_count() > 1:
+        demucs.separate_multigpu.main(params)
+    else:
+        demucs.separate.main(params)
 
 if __name__ == "__main__":
     main()
