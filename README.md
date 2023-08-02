@@ -3,7 +3,7 @@
 
 ### How to use on terminal
 ```python
-python separate_from_folder.py --num_worker 64 -sr 32000 -o path/to/save/outputs -b 128 --two-stems inst --jobs 8 path/to/input/audio/files
+python separate_from_folder.py --num_worker 4 -sr 32000 -o path/to/save/outputs -b 128 --two-stems inst --jobs 4 path/to/input/audio/files
 ```
 
 ### Multi-GPU
