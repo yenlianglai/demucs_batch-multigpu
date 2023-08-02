@@ -11,17 +11,17 @@ If the computer has multiple CUDA-available GPUs, it will automatically make the
 
 ### Arguments
 Refer to argparse part of `separate_from_folder.py` to see all arguments.
-- `input_path` Positional argument. : Input directory path.
-- `-o --out` Folder where to put extracted tracks. A subfolder with the model name will be created.
-- `-b --n_batch` The size of batch.
-- `-n --model_name` for selecting model type.
-- `-l --audiolength` for fixing the input/output audio length. For batch calculation, every input size must be the same. Type in a integer value based on 44100Hz sample rate. (88200 == 2 seconds length) Audio files with shorter length than `-l` will be concatenated with zeros. On the other hand, audio files with longer length will be cut out and only left from the starting to `-l`.
-- `-sr --sample_rate` Sample rate of the output audio file.
-- `--two-stems` Only separate audio into {STEM} and no_{STEM}. ({STEM} candidate : `vocals`, `drums`, `bass`, `others`) If `inst` only no_vocal will be saved.
-- `--mp3` Output file format will be mp3 format.
-- `--filename` ~~Set the name of output file. Use `{track}`, `{trackext}`, `{stem}`, `{ext}` to use variables of track name without extension, track extension, stem name and default output file extension. Default is `{track}/{stem}.{ext}`.~~ As using inputs from a folder, output file name will be the same with input file name, but saved in `--out` directory. If there is any sub-directories between `path/to/input/audio/files` and actual audio files(since this code is using `librosa.glob(**/*.mp3 or wav)` so files in subfolders are also detectable), the sub-directory hierarchy system will be applied the same to `--out` directory, too.
-- `--drop_kb` Files with size under `--drop_kb`KB will be omitted, for corrputed file omission.
-- `--num_worker` A value for `--num_worker` of `torch.utils.data.DataLoader`.
+- `input_path` : Positional argument. : Input directory path.
+- `-o --out` : Folder where to put extracted tracks. A subfolder with the model name will be created.
+- `-b --n_batch` : The size of batch.
+- `-n --model_name` : for selecting model type.
+- `-l --audiolength` : for fixing the input/output audio length. For batch calculation, every input size must be the same. Type in a integer value based on 44100Hz sample rate. (88200 == 2 seconds length) Audio files with shorter length than `-l` will be concatenated with zeros. On the other hand, audio files with longer length will be cut out and only left from the starting to `-l`.
+- `-sr --sample_rate` : Sample rate of the output audio file.
+- `--two-stems` : Only separate audio into {STEM} and no_{STEM}. ({STEM} candidate : `vocals`, `drums`, `bass`, `others`) If `inst` only no_vocal will be saved.
+- `--mp3` : Output file format will be mp3 format.
+- `--filename` : ~~Set the name of output file. Use `{track}`, `{trackext}`, `{stem}`, `{ext}` to use variables of track name without extension, track extension, stem name and default output file extension. Default is `{track}/{stem}.{ext}`.~~ As using inputs from a folder, output file name will be the same with input file name, but saved in `--out` directory. If there is any sub-directories between `path/to/input/audio/files` and actual audio files(since this code is using `librosa.glob(**/*.mp3 or wav)` so files in subfolders are also detectable), the sub-directory hierarchy system will be applied the same to `--out` directory, too.
+- `--drop_kb` : Files with size under `--drop_kb`KB will be omitted, for corrputed file omission.
+- `--num_worker` : A value for `--num_worker` of `torch.utils.data.DataLoader`.
   
 ### Other added features
 - Also as mentioned in `-sr --sample_rate`, output sample rate modifying is added.
