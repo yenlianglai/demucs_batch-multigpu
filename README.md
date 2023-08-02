@@ -28,9 +28,9 @@ Refer to argparse part of `separate_from_folder.py` to see all arguments.
 - `inst` option for `--two-stems` is also an added feature. (Separating only instrumental track)
 - When some files in `path/to/input/audio/files` are already separated and saved in `--out` directory, they are automatically excluded from the calculation. So don't worry if you are restarting the process!
 
-	For an audio dataset with 1 million of 30-second audio files, with original vanilla code, the ETA was around 13 days.
-	With this edition, it got reduced to 2.5 days !
-	(With 64 core CPU and 8x Nvidia A40)
+🎊 For an audio dataset with 1 million of 30-second audio files, with original vanilla code, the ETA was around 13 days.
+With this edition, it got reduced to 2.5 days ! 🎊
+(With 64 core CPU and 8x Nvidia A40)
 - - -
 # Demucs Music Source Separation
 [![Support Ukraine](https://img.shields.io/badge/Support-Ukraine-FFD500?style=flat&labelColor=005BBB)](https://opensource.fb.com/support-ukraine)
