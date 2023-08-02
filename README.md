@@ -19,7 +19,7 @@ Refer to argparse part of `separate_from_folder.py` to see all arguments.
 - `-sr --sample_rate` Sample rate of the output audio file.
 - `--two-stems` Only separate audio into {STEM} and no_{STEM}. ({STEM} candidate : `vocals`, `drums`, `bass`, `others`) If `inst` only no_vocal will be saved.
 - `--mp3` Output file format will be mp3 format.
-- `--filename` ~~Set the name of output file. Use `{track}`, `{trackext}`, `{stem}`, `{ext}` to use variables of track name without extension, track extension, stem name and default output file extension. Default is `{track}/{stem}.{ext}`.~~ As using inputs from a folder, output file name will be the same with input file name, but saved in `--out` directory. If there is any sub-directories between `path/to/input/audio/files` and actual audio files(since this code is using `librosa.glob(**/*.*)` so files in subfolders are also detectable), the sub-directory hierarchy system will be applied the same to `--out` directory, too.
+- `--filename` ~~Set the name of output file. Use `{track}`, `{trackext}`, `{stem}`, `{ext}` to use variables of track name without extension, track extension, stem name and default output file extension. Default is `{track}/{stem}.{ext}`.~~ As using inputs from a folder, output file name will be the same with input file name, but saved in `--out` directory. If there is any sub-directories between `path/to/input/audio/files` and actual audio files(since this code is using `librosa.glob(**/*.mp3 or wav)` so files in subfolders are also detectable), the sub-directory hierarchy system will be applied the same to `--out` directory, too.
 
 ### Other added features
 - Also as mentioned in `-sr --sample_rate`, output sample rate modifying is added.
