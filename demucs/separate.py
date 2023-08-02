@@ -20,6 +20,8 @@ from .htdemucs import HTDemucs
 from .pretrained import get_model_from_args, add_model_flags, ModelLoadingError
 from .data_utils import get_size, DemucsDataSet, load_track
 
+import gc
+
 def get_parser():
     parser = argparse.ArgumentParser("demucs.separate",
                                      description="Separate the sources for the given tracks")
@@ -238,6 +240,8 @@ def main(opts=None):
                 if args.sample_rate is not None :
                     other_stem = librosa.resample(other_stem.detach().cpu().numpy(), orig_sr = model.samplerate, target_sr = args.sample_rate)
                 save_audio(th.Tensor(other_stem), str(stem), **kwargs)
+        del b_sources, sources, other_stem, batch
+        gc.collect()
 
 if __name__ == "__main__":
     main()
