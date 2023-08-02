@@ -46,7 +46,7 @@ class DemucsDataSet:
             wav = th.concat([wav,th.zeros(wav.shape[0],self.audiolength - wav.shape[1])], dim = -1)
 
         is_zero = wav == 0
-        wav = wav + is_zero * 1e-9 #adding eps to zeros so that can be devided by mean value at a line below.
+        wav = wav + is_zero * 1e-7 #adding eps to zeros so that can be devided by mean value at a line below.
 
         ref = wav.mean(0)
         wav -= ref.mean()
