@@ -1,4 +1,4 @@
-# Demucs Music Source Separation (sake Remix)
+# Demucs Music Source Separation (sake Edit)
 ## Batch Separation / Multi GPU(DataParallel) added by sakemin
 
 ### How to use on terminal
