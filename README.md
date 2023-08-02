@@ -1,9 +1,37 @@
-# Demucs Music Source Separation
+# Demucs Music Source Separation (sake Remix)
+## Batch Separation / Multi GPU(DataParallel) added by sakemin
 
+### How to use on terminal
+```python
+python separate_from_folder.py --num_worker 4 -sr 32000 -o path/to/save/outputs -b 128 --two-stems inst --jobs 4 path/to/input/audio/files
+```
+
+### Multi-GPU
+If the computer has multiple CUDA-available GPUs, it will automatically make the model in `DataParallel` type and multi-GPU calculation will be used.
+
+### Arguments
+Refer to argparse part of `separate_from_folder.py` to see all arguments.
+- `input_path` : Positional argument. : Input directory path.
+- `-o --out` : Folder where to put extracted tracks. A subfolder with the model name will be created.
+- `-b --n_batch` : The size of batch.
+- `-n --model_name` : for selecting model type.
+- `-l --audiolength` : for fixing the input/output audio length. For batch calculation, every input size must be the same. Type in a integer value based on 44100Hz sample rate. (88200 == 2 seconds length) Audio files with shorter length than `-l` will be concatenated with zeros. On the other hand, audio files with longer length will be cut out and only left from the starting to `-l`.
+- `-sr --sample_rate` : Sample rate of the output audio file.
+- `--two-stems` : Only separate audio into {STEM} and no_{STEM}. ({STEM} candidate : `vocals`, `drums`, `bass`, `others`) If `inst` only no_vocal will be saved.
+- `--mp3` : Output file format will be mp3 format.
+- `--filename` : ~~Set the name of output file. Use `{track}`, `{trackext}`, `{stem}`, `{ext}` to use variables of track name without extension, track extension, stem name and default output file extension. Default is `{track}/{stem}.{ext}`.~~ As using inputs from a folder, output file name will be the same with input file name, but saved in `--out` directory. If there is any sub-directories between `path/to/input/audio/files` and actual audio files(since this code is using `librosa.glob(**/*.mp3 or wav)` so files in subfolders are also detectable), the sub-directory hierarchy system will be applied the same to `--out` directory, too.
+- `--drop_kb` : Files with size under `--drop_kb`KB will be omitted, for corrputed file omission.
+- `--num_worker` : A value for `--num_worker` of `torch.utils.data.DataLoader`.
+  
+### Other added features
+- Also as mentioned in `-sr --sample_rate`, output sample rate modifying is added.
+- `inst` option for `--two-stems` is also an added feature. (Separating only instrumental track)
+- When some files in `path/to/input/audio/files` are already separated and saved in `--out` directory, they are automatically excluded from the calculation. So don't worry if you are restarting the process!
+- - -
+# Demucs Music Source Separation
 [![Support Ukraine](https://img.shields.io/badge/Support-Ukraine-FFD500?style=flat&labelColor=005BBB)](https://opensource.fb.com/support-ukraine)
 ![tests badge](https://github.com/facebookresearch/demucs/workflows/tests/badge.svg)
 ![linter badge](https://github.com/facebookresearch/demucs/workflows/linter/badge.svg)
-
 
 This is the 4th release of Demucs (v4), featuring Hybrid Transformer based source separation.
 **For the classic Hybrid Demucs (v3):** [Go this commit][demucs_v3].
