@@ -5,56 +5,25 @@
 # LICENSE file in the root directory of this source tree.
 
 import argparse
-import sys
 from pathlib import Path
-import subprocess
 
 from dora.log import fatal
 import torch as th
-import torchaudio as ta
 import librosa
+from torch.utils.data import DataLoader
+
+from tqdm import tqdm
 
 from .apply import apply_model, BagOfModels
-from .audio import AudioFile, convert_audio, save_audio
+from .audio import save_audio
 from .htdemucs import HTDemucs
 from .pretrained import get_model_from_args, add_model_flags, ModelLoadingError
-
-
-def load_track(track, audio_channels, samplerate):
-    errors = {}
-    wav = None
-
-    try:
-        wav = AudioFile(track).read(
-            streams=0,
-            samplerate=samplerate,
-            channels=audio_channels)
-    except FileNotFoundError:
-        errors['ffmpeg'] = 'FFmpeg is not installed.'
-    except subprocess.CalledProcessError:
-        errors['ffmpeg'] = 'FFmpeg could not read the file.'
-
-    if wav is None:
-        try:
-            wav, sr = ta.load(str(track))
-        except RuntimeError as err:
-            errors['torchaudio'] = err.args[0]
-        else:
-            wav = convert_audio(wav, sr, samplerate, audio_channels)
-
-    if wav is None:
-        print(f"Could not load file {track}. "
-              "Maybe it is not a supported file format? ")
-        for backend, error in errors.items():
-            print(f"When trying to load using {backend}, got the following error: {error}")
-        sys.exit(1)
-    return wav
-
+from .data_utils import get_size, DemucsDataSet, load_track
 
 def get_parser():
     parser = argparse.ArgumentParser("demucs.separate",
                                      description="Separate the sources for the given tracks")
-    parser.add_argument("tracks", nargs='+', type=Path, default=[], help='Path to tracks')
+    parser.add_argument("input_path", type=Path, help='Path to tracks')
     add_model_flags(parser)
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument("-o",
@@ -74,8 +43,9 @@ def get_parser():
                         "--clone_subdir",
                         default=None,
                         help="Cloning sub-directories to the output directory. Get the base Input directory path as input. If None, not cloning.")
-    parser.add_argument("--batching",
-                        action='store_true',
+    parser.add_argument("-b", "--n_batch",
+                        default=1,
+                        type=int,
                         help="Batch mode True/False")
     parser.add_argument("-l",
                         "--audiolength",
@@ -140,6 +110,14 @@ def get_parser():
                         type=int,
                         help="Number of jobs. This can increase memory usage but will "
                              "be much faster when multiple cores are available.")
+    parser.add_argument("--drop_kb",
+                        default=180,
+                        type=int,
+                        help="Files with size under drop_kb will be omitted, for corrputed file omission.")
+    parser.add_argument("--num_worker",
+                        default=8,
+                        type=int,
+                        help="num_worker for DataLoader")
 
     return parser
 
@@ -177,394 +155,89 @@ def main(opts=None):
     out.mkdir(parents=True, exist_ok=True)
     print(f"Separated tracks will be stored in {out.resolve()}")
 
-    if args.clone_subdir is None : 
-        if args.batching == False :
-            for track in args.tracks:
-                if not track.exists():
-                    print(
-                        f"File {track} does not exist. If the path contains spaces, "
-                        "please try again after surrounding the entire path with quotes \"\".",
-                        file=sys.stderr)
-                    continue
-                print(f"Separating track {track}")
-                wav = load_track(track, model.audio_channels, model.samplerate)
+    if args.mp3:
+        ext = "mp3"
+    elif args.flac:
+        ext = "flac"
+    else:
+        ext = "wav"
 
-                ref = wav.mean(0)
-                wav -= ref.mean()
-                wav /= ref.std()
-                sources = apply_model(model, wav[None], device=args.device, shifts=args.shifts,
-                                    split=args.split, overlap=args.overlap, progress=True,
-                                    num_workers=args.jobs, segment=args.segment)[0]
-                sources *= ref.std()
-                sources += ref.mean()
+    kwargs = {
+    'samplerate': model.samplerate,
+    'bitrate': args.mp3_bitrate,
+    'preset': args.mp3_preset,
+    'clip': args.clip_mode,
+    'as_float': args.float32,
+    'bits_per_sample': 24 if args.int24 else 16,
+    }
 
-                if args.mp3:
-                    ext = "mp3"
-                elif args.flac:
-                    ext = "flac"
-                else:
-                    ext = "wav"
-                kwargs = {
-                    'samplerate': model.samplerate,
-                    'bitrate': args.mp3_bitrate,
-                    'preset': args.mp3_preset,
-                    'clip': args.clip_mode,
-                    'as_float': args.float32,
-                    'bits_per_sample': 24 if args.int24 else 16,
-                }
-                if args.stem is None:
-                    for source, name in zip(sources, model.sources):
-                        stem = out / args.filename.format(track=track.name.rsplit(".", 1)[0],
-                                                        trackext=track.name.rsplit(".", 1)[-1],
-                                                        stem=name, ext=ext)
-                        stem.parent.mkdir(parents=True, exist_ok=True)
-                        if args.sample_rate is not None :
-                            source = librosa.resample(source.detach().cpu().numpy(), orig_sr = model.samplerate, target_sr = args.sample_rate)
-                        save_audio(th.Tensor(source), str(stem), **kwargs)                
-                elif args.stem == 'inst':
-                    sources = list(sources)
-                    stem = out / args.filename.format(track=track.name.rsplit(".", 1)[0],
+    if args.sample_rate is not None : 
+            kwargs['samplerate'] = args.sample_rate
+
+    dataset = DemucsDataSet(args.input_path, model.audio_channels, model.samplerate, args.out, args.name, ext, args.audiolength, drop_kb = 180)
+    dataloader = DataLoader(dataset, batch_size = args.n_batch, num_workers = args.num_worker, shuffle = False, pin_memory = True)
+
+    
+    for batch, means, stds, tracks in tqdm(dataloader):            
+        b_sources = apply_model(model, batch.to(args.device), device=args.device, shifts=args.shifts,
+                            split=args.split, overlap=args.overlap, progress=True,
+                            num_workers=args.jobs, segment=args.segment)
+        
+        for k, sources in enumerate(list(b_sources)):
+            sources *= stds[k]
+            sources += means[k]
+            track = Path(tracks[k])
+            print('Saving ',str(track.name))
+            subdir = track.relative_to(Path(args.clone_subdir)).parent
+            if args.stem is None:
+                for source, name in zip(sources, model.sources):
+                    stem = out / subdir / args.filename.format(track=track.name.rsplit(".", 1)[0],
                                                     trackext=track.name.rsplit(".", 1)[-1],
-                                                    stem=args.stem, ext=ext)
+                                                    stem=name, ext=ext)
                     stem.parent.mkdir(parents=True, exist_ok=True)
-                    sources.pop(model.sources.index('vocal'))
-                    # Warning : after poping the stem, selected stem is no longer in the list 'sources'
-                    other_stem = th.zeros_like(sources[0])
-                    for i in sources:
-                        other_stem += i
-                    stem = out / args.filename.format(track=track.name.rsplit(".", 1)[0],
-                                                    trackext=track.name.rsplit(".", 1)[-1],
-                                                    stem=args.stem, ext=ext)
-                    stem.parent.mkdir(parents=True, exist_ok=True)
-                    if args.sample_rate is not None :
-                        other_stem = librosa.resample(other_stem.detach().cpu().numpy(), orig_sr = model.samplerate, target_sr = args.sample_rate)
-                    save_audio(th.Tensor(other_stem), str(stem), **kwargs)
-                else:
-                    sources = list(sources)
-                    stem = out / args.filename.format(track=track.name.rsplit(".", 1)[0],
-                                                    trackext=track.name.rsplit(".", 1)[-1],
-                                                    stem=args.stem, ext=ext)
-                    stem.parent.mkdir(parents=True, exist_ok=True)
-                    source = sources.pop(model.sources.index(args.stem))
                     if args.sample_rate is not None :
                         source = librosa.resample(source.detach().cpu().numpy(), orig_sr = model.samplerate, target_sr = args.sample_rate)
                     save_audio(th.Tensor(source), str(stem), **kwargs)
-                    # Warning : after poping the stem, selected stem is no longer in the list 'sources'
-                    other_stem = th.zeros_like(sources[0])
-                    for i in sources:
-                        other_stem += i
-                    stem = out / args.filename.format(track=track.name.rsplit(".", 1)[0],
-                                                    trackext=track.name.rsplit(".", 1)[-1],
-                                                    stem="no_"+args.stem, ext=ext)
-                    stem.parent.mkdir(parents=True, exist_ok=True)
-                    if args.sample_rate is not None :
-                        other_stem = librosa.resample(other_stem.detach().cpu().numpy(), orig_sr = model.samplerate, target_sr = args.sample_rate)
-                    save_audio(th.Tensor(other_stem), str(stem), **kwargs)
-        else:
-            wavlist = []
-            meanlist = []
-            stdlist = []
-            tracklist = []
-
-            for track in args.tracks:
-                if not track.exists():
-                    print(
-                        f"File {track} does not exist. If the path contains spaces, "
-                        "please try again after surrounding the entire path with quotes \"\".",
-                        file=sys.stderr)
-                    continue
-                print(f"Separating track {track}")
-                wav = load_track(track, model.audio_channels, model.samplerate)
-
-                if len(wav.shape) == 1 :
-                    th.stack([wav,wav], dim=0)
-                if wav.shape[-1] >= args.audiolength :
-                    wav = wav[:, : args.audiolength]
-                else :
-                    wav = th.concat([wav,th.zeros(wav.shape[0],args.audiolength - wav.shape[1])], dim = -1)
-
-                is_zero = wav == 0
-                wav = wav + is_zero * 1e-9 #adding eps to zeros so that can be devided by mean value at a line below.
-
-                ref = wav.mean(0)
-                wav -= ref.mean()
-                wav /= ref.std()
-                
-                wavlist.append(wav)
-                meanlist.append(ref.mean())
-                stdlist.append(ref.std())
-                tracklist.append(track)
-
-            wav = th.stack(wavlist, dim=0)
-
-            b_sources = apply_model(model, wav, device=args.device, shifts=args.shifts,
-                                split=args.split, overlap=args.overlap, progress=True,
-                                num_workers=args.jobs, segment=args.segment)
-            
-            if args.mp3:
-                ext = "mp3"
-            elif args.flac:
-                ext = "flac"
+            elif args.stem == 'inst':
+                args.filename = "{track}.{ext}"
+                sources = list(sources)
+                stem = out / subdir / args.filename.format(track=track.name.rsplit(".", 1)[0],
+                                                trackext=track.name.rsplit(".", 1)[-1],
+                                                stem=args.stem, ext=ext)
+                stem.parent.mkdir(parents=True, exist_ok=True)
+                sources.pop(model.sources.index('vocals'))
+                # Warning : after poping the stem, selected stem is no longer in the list 'sources'
+                other_stem = th.zeros_like(sources[0])
+                for i in sources:
+                    other_stem += i
+                stem = out / subdir / args.filename.format(track=track.name.rsplit(".", 1)[0],
+                                                trackext=track.name.rsplit(".", 1)[-1],
+                                                stem="no_"+args.stem, ext=ext)
+                stem.parent.mkdir(parents=True, exist_ok=True)
+                if args.sample_rate is not None :
+                    other_stem = librosa.resample(other_stem.detach().cpu().numpy(), orig_sr = model.samplerate, target_sr = args.sample_rate)
+                save_audio(th.Tensor(other_stem), str(stem), **kwargs)
             else:
-                ext = "wav"
-            kwargs = {
-                'samplerate': model.samplerate,
-                'bitrate': args.mp3_bitrate,
-                'preset': args.mp3_preset,
-                'clip': args.clip_mode,
-                'as_float': args.float32,
-                'bits_per_sample': 24 if args.int24 else 16,
-            }
-
-            for k, sources in enumerate(list(b_sources)):
-                sources *= stdlist[k]
-                sources += meanlist[k]
-                track = tracklist[k]
-                if args.stem is None:
-                    for source, name in zip(sources, model.sources):
-                        stem = out / args.filename.format(track=track.name.rsplit(".", 1)[0],
-                                                        trackext=track.name.rsplit(".", 1)[-1],
-                                                        stem=name, ext=ext)
-                        stem.parent.mkdir(parents=True, exist_ok=True)
-                        if args.sample_rate is not None :
-                            source = librosa.resample(source.detach().cpu().numpy(), orig_sr = model.samplerate, target_sr = args.sample_rate)
-                        save_audio(th.Tensor(source), str(stem), **kwargs)
-                elif args.stem == 'inst':
-                    sources = list(sources)
-                    stem = out / args.filename.format(track=track.name.rsplit(".", 1)[0],
-                                                    trackext=track.name.rsplit(".", 1)[-1],
-                                                    stem=args.stem, ext=ext)
-                    stem.parent.mkdir(parents=True, exist_ok=True)
-                    sources.pop(model.sources.index('vocal'))
-                    # Warning : after poping the stem, selected stem is no longer in the list 'sources'
-                    other_stem = th.zeros_like(sources[0])
-                    for i in sources:
-                        other_stem += i
-                    stem = out / args.filename.format(track=track.name.rsplit(".", 1)[0],
-                                                    trackext=track.name.rsplit(".", 1)[-1],
-                                                    stem=args.stem, ext=ext)
-                    stem.parent.mkdir(parents=True, exist_ok=True)
-                    if args.sample_rate is not None :
-                        other_stem = librosa.resample(other_stem.detach().cpu().numpy(), orig_sr = model.samplerate, target_sr = args.sample_rate)
-                    save_audio(th.Tensor(other_stem), str(stem), **kwargs)
-                else:
-                    sources = list(sources)
-                    stem = out / args.filename.format(track=track.name.rsplit(".", 1)[0],
-                                                    trackext=track.name.rsplit(".", 1)[-1],
-                                                    stem=args.stem, ext=ext)
-                    stem.parent.mkdir(parents=True, exist_ok=True)
-                    source = sources.pop(model.sources.index(args.stem))
-                    if args.sample_rate is not None :
-                        source = librosa.resample(source.detach().cpu().numpy(), orig_sr = model.samplerate, target_sr = args.sample_rate)
-                    save_audio(th.Tensor(source), str(stem), **kwargs)
-                    # Warning : after poping the stem, selected stem is no longer in the list 'sources'
-                    other_stem = th.zeros_like(sources[0])
-                    for i in sources:
-                        other_stem += i
-                    stem = out / args.filename.format(track=track.name.rsplit(".", 1)[0],
-                                                    trackext=track.name.rsplit(".", 1)[-1],
-                                                    stem="no_"+args.stem, ext=ext)
-                    stem.parent.mkdir(parents=True, exist_ok=True)
-                    if args.sample_rate is not None :
-                        other_stem = librosa.resample(other_stem.detach().cpu().numpy(), orig_sr = model.samplerate, target_sr = args.sample_rate)
-                    save_audio(th.Tensor(other_stem), str(stem), **kwargs)
-    else :
-        if args.batching == False :
-            for track in args.tracks:
-                if not track.exists():
-                    print(
-                        f"File {track} does not exist. If the path contains spaces, "
-                        "please try again after surrounding the entire path with quotes \"\".",
-                        file=sys.stderr)
-                    continue
-                print(f"Separating track {track}")
-                wav = load_track(track, model.audio_channels, model.samplerate)
-
-                ref = wav.mean(0)
-                wav -= ref.mean()
-                wav /= ref.std()
-                sources = apply_model(model, wav[None], device=args.device, shifts=args.shifts,
-                                    split=args.split, overlap=args.overlap, progress=True,
-                                    num_workers=args.jobs, segment=args.segment)[0]
-                sources *= ref.std()
-                sources += ref.mean()
-
-                if args.mp3:
-                    ext = "mp3"
-                elif args.flac:
-                    ext = "flac"
-                else:
-                    ext = "wav"
-                kwargs = {
-                    'samplerate': model.samplerate,
-                    'bitrate': args.mp3_bitrate,
-                    'preset': args.mp3_preset,
-                    'clip': args.clip_mode,
-                    'as_float': args.float32,
-                    'bits_per_sample': 24 if args.int24 else 16,
-                }
-
-                subdir = track.relative_to(Path(args.clone_subdir)).parent
-                
-                if args.stem is None:
-                    for source, name in zip(sources, model.sources):
-                        stem = out / subdir / args.filename.format(track=track.name.rsplit(".", 1)[0],
-                                                        trackext=track.name.rsplit(".", 1)[-1],
-                                                        stem=name, ext=ext)
-                        stem.parent.mkdir(parents=True, exist_ok=True)
-                        if args.sample_rate is not None :
-                            source = librosa.resample(source.detach().cpu().numpy(), orig_sr = model.samplerate, target_sr = args.sample_rate)
-                        save_audio(th.Tensor(source), str(stem), **kwargs)
-                elif args.stem == 'inst':
-                    args.filename = "{track}.{ext}"
-                    sources = list(sources)
-                    stem = out / subdir / args.filename.format(track=track.name.rsplit(".", 1)[0],
-                                                    trackext=track.name.rsplit(".", 1)[-1],
-                                                    stem=args.stem, ext=ext)
-                    stem.parent.mkdir(parents=True, exist_ok=True)
-                    sources.pop(model.sources.index('vocals'))
-                    # Warning : after poping the stem, selected stem is no longer in the list 'sources'
-                    other_stem = th.zeros_like(sources[0])
-                    for i in sources:
-                        other_stem += i
-                    stem = out / subdir / args.filename.format(track=track.name.rsplit(".", 1)[0],
-                                                    trackext=track.name.rsplit(".", 1)[-1],
-                                                    stem="no_"+args.stem, ext=ext)
-                    stem.parent.mkdir(parents=True, exist_ok=True)
-                    if args.sample_rate is not None :
-                        other_stem = librosa.resample(other_stem.detach().cpu().numpy(), orig_sr = model.samplerate, target_sr = args.sample_rate)
-                    save_audio(th.Tensor(other_stem), str(stem), **kwargs)
-                else:
-                    sources = list(sources)
-                    stem = out / subdir / args.filename.format(track=track.name.rsplit(".", 1)[0],
-                                                    trackext=track.name.rsplit(".", 1)[-1],
-                                                    stem=args.stem, ext=ext)
-                    stem.parent.mkdir(parents=True, exist_ok=True)
-                    source = sources.pop(model.sources.index(args.stem))
-                    if args.sample_rate is not None :
-                        source = librosa.resample(source.detach().cpu().numpy(), orig_sr = model.samplerate, target_sr = args.sample_rate)
-                    save_audio(th.Tensor(source), str(stem), **kwargs)
-                    # Warning : after poping the stem, selected stem is no longer in the list 'sources'
-                    other_stem = th.zeros_like(sources[0])
-                    for i in sources:
-                        other_stem += i
-                    stem = out / subdir / args.filename.format(track=track.name.rsplit(".", 1)[0],
-                                                    trackext=track.name.rsplit(".", 1)[-1],
-                                                    stem="no_"+args.stem, ext=ext)
-                    stem.parent.mkdir(parents=True, exist_ok=True)
-                    if args.sample_rate is not None :
-                        other_stem = librosa.resample(other_stem.detach().cpu().numpy(), orig_sr = model.samplerate, target_sr = args.sample_rate)
-                    save_audio(th.Tensor(other_stem), str(stem), **kwargs)
-        else:
-            wavlist = []
-            meanlist = []
-            stdlist = []
-            tracklist = []
-
-            for track in args.tracks:
-                if not track.exists():
-                    print(
-                        f"File {track} does not exist. If the path contains spaces, "
-                        "please try again after surrounding the entire path with quotes \"\".",
-                        file=sys.stderr)
-                    continue
-                print(f"Separating track {track}")
-                wav = load_track(track, model.audio_channels, model.samplerate)
-
-                if len(wav.shape) == 1 :
-                    th.stack([wav,wav], dim=0)
-                if wav.shape[-1] >= args.audiolength :
-                    wav = wav[:, : args.audiolength]
-                else :
-                    wav = th.concat([wav,th.zeros(wav.shape[0],args.audiolength - wav.shape[1])], dim = -1)
-
-                is_zero = wav == 0
-                wav = wav + is_zero * 1e-9 #adding eps to zeros so that can be devided by mean value at a line below.
-
-                ref = wav.mean(0)
-                wav -= ref.mean()
-                wav /= ref.std()
-                
-                wavlist.append(wav)
-                meanlist.append(ref.mean())
-                stdlist.append(ref.std())
-                tracklist.append(track)
-
-            wav = th.stack(wavlist, dim=0)
-
-            b_sources = apply_model(model, wav, device=args.device, shifts=args.shifts,
-                                split=args.split, overlap=args.overlap, progress=True,
-                                num_workers=args.jobs, segment=args.segment)
-            
-            if args.mp3:
-                ext = "mp3"
-            elif args.flac:
-                ext = "flac"
-            else:
-                ext = "wav"
-            kwargs = {
-                'samplerate': model.samplerate,
-                'bitrate': args.mp3_bitrate,
-                'preset': args.mp3_preset,
-                'clip': args.clip_mode,
-                'as_float': args.float32,
-                'bits_per_sample': 24 if args.int24 else 16,
-            }
-
-            for k, sources in enumerate(list(b_sources)):
-                sources *= stdlist[k]
-                sources += meanlist[k]
-                track = tracklist[k]
-                subdir = track.relative_to(Path(args.clone_subdir)).parent
-                if args.stem is None:
-                    for source, name in zip(sources, model.sources):
-                        stem = out / subdir / args.filename.format(track=track.name.rsplit(".", 1)[0],
-                                                        trackext=track.name.rsplit(".", 1)[-1],
-                                                        stem=name, ext=ext)
-                        stem.parent.mkdir(parents=True, exist_ok=True)
-                        if args.sample_rate is not None :
-                            source = librosa.resample(source.detach().cpu().numpy(), orig_sr = model.samplerate, target_sr = args.sample_rate)
-                        save_audio(th.Tensor(source), str(stem), **kwargs)
-                elif args.stem == 'inst':
-                    args.filename = "{track}.{ext}"
-                    sources = list(sources)
-                    stem = out / subdir / args.filename.format(track=track.name.rsplit(".", 1)[0],
-                                                    trackext=track.name.rsplit(".", 1)[-1],
-                                                    stem=args.stem, ext=ext)
-                    stem.parent.mkdir(parents=True, exist_ok=True)
-                    sources.pop(model.sources.index('vocals'))
-                    # Warning : after poping the stem, selected stem is no longer in the list 'sources'
-                    other_stem = th.zeros_like(sources[0])
-                    for i in sources:
-                        other_stem += i
-                    stem = out / subdir / args.filename.format(track=track.name.rsplit(".", 1)[0],
-                                                    trackext=track.name.rsplit(".", 1)[-1],
-                                                    stem="no_"+args.stem, ext=ext)
-                    stem.parent.mkdir(parents=True, exist_ok=True)
-                    if args.sample_rate is not None :
-                        other_stem = librosa.resample(other_stem.detach().cpu().numpy(), orig_sr = model.samplerate, target_sr = args.sample_rate)
-                    save_audio(th.Tensor(other_stem), str(stem), **kwargs)
-                else:
-                    sources = list(sources)
-                    stem = out / subdir / args.filename.format(track=track.name.rsplit(".", 1)[0],
-                                                    trackext=track.name.rsplit(".", 1)[-1],
-                                                    stem=args.stem, ext=ext)
-                    stem.parent.mkdir(parents=True, exist_ok=True)
-                    source = sources.pop(model.sources.index(args.stem))
-                    if args.sample_rate is not None :
-                        source = librosa.resample(source.detach().cpu().numpy(), orig_sr = model.samplerate, target_sr = args.sample_rate)
-                    save_audio(th.Tensor(source), str(stem), **kwargs)
-                    # Warning : after poping the stem, selected stem is no longer in the list 'sources'
-                    other_stem = th.zeros_like(sources[0])
-                    for i in sources:
-                        other_stem += i
-                    stem = out / subdir / args.filename.format(track=track.name.rsplit(".", 1)[0],
-                                                    trackext=track.name.rsplit(".", 1)[-1],
-                                                    stem="no_"+args.stem, ext=ext)
-                    stem.parent.mkdir(parents=True, exist_ok=True)
-                    if args.sample_rate is not None :
-                        other_stem = librosa.resample(other_stem.detach().cpu().numpy(), orig_sr = model.samplerate, target_sr = args.sample_rate)
-                    save_audio(th.Tensor(other_stem), str(stem), **kwargs)
+                sources = list(sources)
+                stem = out / subdir / args.filename.format(track=track.name.rsplit(".", 1)[0],
+                                                trackext=track.name.rsplit(".", 1)[-1],
+                                                stem=args.stem, ext=ext)
+                stem.parent.mkdir(parents=True, exist_ok=True)
+                source = sources.pop(model.sources.index(args.stem))
+                if args.sample_rate is not None :
+                    source = librosa.resample(source.detach().cpu().numpy(), orig_sr = model.samplerate, target_sr = args.sample_rate)
+                save_audio(th.Tensor(source), str(stem), **kwargs)
+                # Warning : after poping the stem, selected stem is no longer in the list 'sources'
+                other_stem = th.zeros_like(sources[0])
+                for i in sources:
+                    other_stem += i
+                stem = out / subdir / args.filename.format(track=track.name.rsplit(".", 1)[0],
+                                                trackext=track.name.rsplit(".", 1)[-1],
+                                                stem="no_"+args.stem, ext=ext)
+                stem.parent.mkdir(parents=True, exist_ok=True)
+                if args.sample_rate is not None :
+                    other_stem = librosa.resample(other_stem.detach().cpu().numpy(), orig_sr = model.samplerate, target_sr = args.sample_rate)
+                save_audio(th.Tensor(other_stem), str(stem), **kwargs)
 
 if __name__ == "__main__":
     main()
