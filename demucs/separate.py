@@ -289,10 +289,6 @@ def main(opts=None):
                             ext=ext,
                         )
                     )
-                    # stem = (
-                    #     out
-                    #     / f"{track.name.rsplit('.', 1)[0]}_{model.name}_{name}.{ext}"
-                    # )
                     stem.parent.mkdir(parents=True, exist_ok=True)
                     if args.sample_rate is not None:
                         source = librosa.resample(
