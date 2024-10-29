@@ -8,7 +8,6 @@ from tqdm import tqdm
 
 from .audio import AudioFile, convert_audio
 
-
 def get_size(file_path, unit="kb"):
     file_size = os.path.getsize(file_path)
     exponents_map = {"bytes": 0, "kb": 1, "mb": 2, "gb": 3}
@@ -20,7 +19,6 @@ def get_size(file_path, unit="kb"):
     else:
         size = file_size / 1024 ** exponents_map[unit]
         return round(size, 3)
-
 
 class DemucsDataSet:
     def __init__(
@@ -36,8 +34,10 @@ class DemucsDataSet:
         song_ids=None,
     ):
         self.path = input_path
-        self.file_list = list(self.path.rglob("**/*.mp3")) + list(
-            self.path.rglob("**/*.wav")
+        self.file_list = (
+            list(self.path.rglob("**/*.mp3"))
+            + list(self.path.rglob("**/*.wav"))
+            + list(self.path.rglob("**/*.aac"))
         )
 
         if song_ids:
@@ -88,7 +88,6 @@ class DemucsDataSet:
 
     def __len__(self):
         return len(self.file_list)
-
 
 def load_track(track, audio_channels, samplerate):
     errors = {}
