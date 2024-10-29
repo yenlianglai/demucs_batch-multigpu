@@ -170,6 +170,8 @@ def main(opts=None):
     parser = get_parser()
     args = parser.parse_args(opts)
 
+    print(f"running on {args.device}")
+
     try:
         model = get_model_from_args(args)
     except ModelLoadingError as error:
