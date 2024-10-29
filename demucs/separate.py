@@ -20,7 +20,6 @@ from .data_utils import DemucsDataSet, get_size, load_track
 from .htdemucs import HTDemucs
 from .pretrained import ModelLoadingError, add_model_flags, get_model_from_args
 
-
 def get_parser():
     parser = argparse.ArgumentParser(
         "demucs.separate", description="Separate the sources for the given tracks"
@@ -165,7 +164,6 @@ def get_parser():
 
     return parser
 
-
 def main(opts=None):
     parser = get_parser()
     args = parser.parse_args(opts)
@@ -204,7 +202,13 @@ def main(opts=None):
             )
         )
     out = args.out / args.name
-    out.mkdir(parents=True, exist_ok=True)
+    if not out.exists():
+        print(
+            f"User must manually create the corresponding model output directory: {args.name} before running the script, \n"
+            + "as mountpoint s3 does not support creat folder operation."
+        )
+        return
+
     print(f"Separated tracks will be stored in {out.resolve()}")
 
     if args.mp3:
@@ -281,6 +285,10 @@ def main(opts=None):
                             ext=ext,
                         )
                     )
+                    # stem = (
+                    #     out
+                    #     / f"{track.name.rsplit('.', 1)[0]}_{model.name}_{name}.{ext}"
+                    # )
                     stem.parent.mkdir(parents=True, exist_ok=True)
                     if args.sample_rate is not None:
                         source = librosa.resample(
@@ -371,7 +379,6 @@ def main(opts=None):
                 save_audio(th.Tensor(other_stem), str(stem), **kwargs)
         del b_sources, sources, other_stem, batch
         gc.collect()
-
 
 if __name__ == "__main__":
     main()
