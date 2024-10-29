@@ -8,6 +8,7 @@ from tqdm import tqdm
 
 from .audio import AudioFile, convert_audio
 
+
 def get_size(file_path, unit="kb"):
     file_size = os.path.getsize(file_path)
     exponents_map = {"bytes": 0, "kb": 1, "mb": 2, "gb": 3}
@@ -19,6 +20,7 @@ def get_size(file_path, unit="kb"):
     else:
         size = file_size / 1024 ** exponents_map[unit]
         return round(size, 3)
+
 
 class DemucsDataSet:
     def __init__(
@@ -48,11 +50,12 @@ class DemucsDataSet:
         print("Number of initially loaded files : ", len(self.file_list))
         ffiles = []
         for file in tqdm(self.file_list):
+            pp = str(file.name.rsplit(".", 1)[0])
+
             if (
                 out
                 / model_name
-                / file.parent.relative_to(self.path)
-                / (str(file.name.rsplit(".", 1)[0]) + "." + ext)
+                / (str(file.name.rsplit(".", 1)[0]) + "." + "vocals." + ext)
             ).exists() == False and get_size(file) > drop_kb:
                 ffiles.append(file)
         self.file_list = ffiles
@@ -88,6 +91,7 @@ class DemucsDataSet:
 
     def __len__(self):
         return len(self.file_list)
+
 
 def load_track(track, audio_channels, samplerate):
     errors = {}
