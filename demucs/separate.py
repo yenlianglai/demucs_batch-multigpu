@@ -20,6 +20,7 @@ from .data_utils import DemucsDataSet, get_size, load_track
 from .htdemucs import HTDemucs
 from .pretrained import ModelLoadingError, add_model_flags, get_model_from_args
 
+
 def get_parser():
     parser = argparse.ArgumentParser(
         "demucs.separate", description="Separate the sources for the given tracks"
@@ -164,6 +165,7 @@ def get_parser():
 
     return parser
 
+
 def main(opts=None):
     parser = get_parser()
     args = parser.parse_args(opts)
@@ -234,6 +236,8 @@ def main(opts=None):
     with open(args.song_id_file, "r") as f:
         for line in f:
             song_ids.append(line.strip())
+
+    print(f"Number of song ids to separate: {len(song_ids)}")
 
     dataset = DemucsDataSet(
         args.input_path,
@@ -379,6 +383,7 @@ def main(opts=None):
                 save_audio(th.Tensor(other_stem), str(stem), **kwargs)
         del b_sources, sources, other_stem, batch
         gc.collect()
+
 
 if __name__ == "__main__":
     main()
