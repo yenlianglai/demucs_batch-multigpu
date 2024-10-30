@@ -21,6 +21,7 @@ from .data_utils import DemucsDataSet, get_size, load_track
 from .htdemucs import HTDemucs
 from .pretrained import ModelLoadingError, add_model_flags, get_model_from_args
 
+
 def get_parser():
     parser = argparse.ArgumentParser(
         "demucs.separate", description="Separate the sources for the given tracks"
@@ -158,6 +159,7 @@ def get_parser():
 
     return parser
 
+
 def main(opts=None):
     parser = get_parser()
     args = parser.parse_args(opts)
@@ -244,6 +246,7 @@ def main(opts=None):
         num_workers=args.num_worker,
         shuffle=False,
         pin_memory=True,
+        prefetch_factor=2,
     )
 
     for batch, means, stds, tracks in tqdm(dataloader):
@@ -367,6 +370,7 @@ def main(opts=None):
                 save_audio(th.Tensor(other_stem), str(stem), **kwargs)
         del b_sources, sources, other_stem, batch
         gc.collect()
+
 
 if __name__ == "__main__":
     main()

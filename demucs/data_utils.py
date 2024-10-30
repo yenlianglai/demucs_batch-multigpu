@@ -66,9 +66,7 @@ class DemucsDataSet:
         self.audiolength = audiolength
 
     def __getitem__(self, idx):
-        print("Loading file : ", self.file_list[idx])
         fn = self.file_list[idx]
-
         wav = load_track(fn, self.audio_channels, self.samplerate)
 
         if len(wav.shape) == 1:
