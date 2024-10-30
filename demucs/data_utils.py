@@ -43,9 +43,15 @@ class DemucsDataSet:
         )
 
         if song_ids:
-            self.file_list = [
-                file for file in self.file_list if file.name.split(".")[0] in song_ids
-            ]
+            self.file_list = list(
+                set(
+                    [
+                        file
+                        for file in self.file_list
+                        if file.name.split(".")[0] in song_ids
+                    ]
+                )
+            )
 
         print("Number of initially loaded files : ", len(self.file_list))
         ffiles = []
