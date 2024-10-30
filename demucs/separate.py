@@ -258,6 +258,7 @@ def main(opts=None):
         num_workers=args.num_worker,
         shuffle=False,
         pin_memory=True,
+        prefetch_factor=2,
     )
 
     for batch, means, stds, tracks in tqdm(dataloader):
