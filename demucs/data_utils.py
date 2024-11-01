@@ -36,28 +36,17 @@ class DemucsDataSet:
         song_ids=None,
     ):
         self.path = input_path
-        self.file_list = (
-            list(self.path.rglob("**/*.mp3"))
-            + list(self.path.rglob("**/*.wav"))
-            + list(self.path.rglob("**/*.aac"))
-        )
 
-        if song_ids:
-            self.file_list = list(
-                set(
-                    [
-                        file
-                        for file in self.file_list
-                        if file.name.split(".")[0] in song_ids
-                    ]
-                )
-            )
+        def file_generator(song_ids):
+            for file in self.path.rglob("**/*.aac"):
+                if not song_ids or file.name.split(".")[0] in song_ids:
+                    yield file
+
+        self.file_list = list(file_generator(song_ids))
 
         print("Number of initially loaded files : ", len(self.file_list))
         ffiles = []
         for file in tqdm(self.file_list):
-            pp = str(file.name.rsplit(".", 1)[0])
-
             if (
                 out
                 / model_name
