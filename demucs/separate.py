@@ -176,8 +176,14 @@ def get_parser():
 
     return parser
 
+def parse_s3_url(url: str):
+    """Parse an bucket/key/ URL into a (bucket, key) pair"""
+    bucket, prefix = url.split("/", 1)
+    return bucket, prefix
+
 def save_audio_to_s3(wav_tensor, s3_client, bucket, key, **kwargs):
     """Save an audio Tensor to S3 bucket."""
+
     buffer = BytesIO()
     ta.save(
         buffer,
@@ -259,6 +265,8 @@ def main(opts=None):
     }
 
     for batch, means, stds, tracks in tqdm(dataloader):
+        if len(batch == 0):
+            continue
         b_sources = apply_model(
             model,
             batch.to(args.device),
