@@ -11,9 +11,8 @@ from dora.log import fatal
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from .apply import BagOfModels, apply_model
+from .apply import apply_model
 from .data_utils import DemucsDataSet
-from .htdemucs import HTDemucs
 from .pretrained import ModelLoadingError, add_model_flags, get_model_from_args
 
 def collate_fn(batch):
@@ -29,17 +28,22 @@ def get_parser():
     parser.add_argument("-v", "--verbose", action="store_true")
 
     # S3-related arguments
-    parser.add_argument("--aws_access_key_id", type=str, help="AWS access key ID")
     parser.add_argument(
-        "--aws_secret_access_key", type=str, help="AWS secret access key"
+        "--aws_access_key_id", type=str, required=True, help="AWS access key ID"
+    )
+    parser.add_argument(
+        "--aws_secret_access_key", type=str, required=True, help="AWS secret access key"
     )
     parser.add_argument("--aws_session_token", type=str, help="AWS session token")
     parser.add_argument(
         "--region", type=str, help="AWS region for S3", default="us-east-1"
     )
-    parser.add_argument("--input_bucket", type=str, help="Input S3 bucket")
+    parser.add_argument(
+        "--input_bucket", type=str, required=True, help="Input S3 bucket"
+    )
     parser.add_argument(
         "--output_bucket",
+        required=True,
         type=str,
         help="S3 bucket where to put extracted tracks.",
     )
