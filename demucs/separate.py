@@ -13,28 +13,36 @@ import torch as th
 from dora.log import fatal
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-
+import boto3
 from .apply import BagOfModels, apply_model
 from .audio import save_audio
 from .data_utils import DemucsDataSet, get_size, load_track
 from .htdemucs import HTDemucs
 from .pretrained import ModelLoadingError, add_model_flags, get_model_from_args
 
-
 def get_parser():
     parser = argparse.ArgumentParser(
         "demucs.separate", description="Separate the sources for the given tracks"
     )
-    parser.add_argument("input_path", type=Path, help="Path to tracks")
     add_model_flags(parser)
     parser.add_argument("-v", "--verbose", action="store_true")
+
+    # S3-related arguments
+    parser.add_argument("--aws_access_key_id", type=str, help="AWS access key ID")
+    parser.add_argument(
+        "--aws_secret_access_key", type=str, help="AWS secret access key"
+    )
+    parser.add_argument("--aws_session_token", type=str, help="AWS session token")
+    parser.add_argument(
+        "--region", type=str, help="AWS region for S3", default="us-east-1"
+    )
+    parser.add_argument("input_bucket", type=Path, help="Input S3 bucket")
     parser.add_argument(
         "-o",
-        "--out",
+        "--out_bucket",
         type=Path,
         default=Path("separated"),
-        help="Folder where to put extracted tracks. A subfolder "
-        "with the model name will be created.",
+        help="S3 bucket where to put extracted tracks.",
     )
     parser.add_argument(
         "--filename",
@@ -165,7 +173,6 @@ def get_parser():
 
     return parser
 
-
 def main(opts=None):
     parser = get_parser()
     args = parser.parse_args(opts)
@@ -241,14 +248,23 @@ def main(opts=None):
 
     print(f"Number of song ids to separate: {len(song_ids)}")
 
+    s3_client = boto3.client(
+        "s3",
+        aws_access_key_id=args.aws_access_key_id,
+        aws_secret_access_key=args.aws_secret_access_key,
+        aws_session_token=args.aws_session_token,
+        region_name=args.region,
+    )
+
     dataset = DemucsDataSet(
-        args.input_path,
-        model.audio_channels,
-        model.samplerate,
-        args.out,
-        args.name,
-        ext,
-        args.audiolength,
+        s3_client=s3_client,
+        input_bucket=args.input_bucket,
+        audio_channels=model.audio_channels,
+        samplerate=model.samplerate,
+        output_bucket=args.out_bucket,
+        model_name=args.name,
+        ext=ext,
+        audiolength=args.audiolength,
         drop_kb=180,
         song_ids=set(song_ids),
     )
@@ -382,7 +398,6 @@ def main(opts=None):
                 save_audio(th.Tensor(other_stem), str(stem), **kwargs)
         del b_sources, sources, other_stem, batch
         gc.collect()
-
 
 if __name__ == "__main__":
     main()

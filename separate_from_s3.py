@@ -1,31 +1,34 @@
 import argparse
-import os
 from pathlib import Path
 
 import demucs.separate
 import demucs.separate_multigpu
 import torch as th
-from tqdm import tqdm
-
-
-def batch(iterable, n=1):
-    l = len(iterable)
-    for ndx in range(0, l, n):
-        yield iterable[ndx : min(ndx + n, l)]
-
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("input_path", type=Path, help="Input directory folder path")
-    parser.add_argument("-b", "--n_batch", default=8, help="Batch size")
+
+    # S3-related arguments
+    parser.add_argument("--aws_access_key_id", type=str, help="AWS access key ID")
+    parser.add_argument(
+        "--aws_secret_access_key", type=str, help="AWS secret access key"
+    )
+    parser.add_argument("--aws_session_token", type=str, help="AWS session token")
+    parser.add_argument(
+        "--region", type=str, help="AWS region for S3", default="us-east-1"
+    )
+    parser.add_argument("input_bucket", type=Path, help="Input S3 bucket")
     parser.add_argument(
         "-o",
-        "--out",
+        "--out_bucket",
         type=Path,
         default=Path("separated"),
-        help="Folder where to put extracted tracks. A subfolder "
-        "with the model name will be created.",
+        help="S3 bucket where to put extracted tracks.",
     )
+
+    # Other arguments for your application
+    parser.add_argument("-b", "--n_batch", default=8, help="Batch size")
+
     parser.add_argument(
         "--filename",
         default="{track}/{stem}.{ext}",
@@ -178,7 +181,7 @@ def main():
         "-d",
         args.device,
         "-c",
-        str(args.input_path),
+        str(args.input_bucket),
         "--mp3-bitrate",
         str(args.mp3_bitrate),
         "--mp3-preset",
@@ -186,13 +189,22 @@ def main():
         "-j",
         str(args.jobs),
         "-o",
-        str(args.out),
+        str(args.out_bucket),
         "-l",
         str(args.audiolength),
         "-sr",
         str(args.sample_rate),
         "--song_id_file",
         str(args.song_id_file),
+        # S3-related parameters
+        "--aws_access_key_id",
+        args.aws_access_key_id,
+        "--aws_secret_access_key",
+        args.aws_secret_access_key,
+        "--aws_session_token",
+        args.aws_session_token,
+        "--region",
+        args.region,
     ]
 
     if args.mp3:
@@ -212,13 +224,12 @@ def main():
         params.append("--two-stems")
         params.append(args.stem)
 
-    params.append(str(args.input_path))
+    params.append(str(args.input_bucket))
 
     if th.cuda.device_count() > 1:
         demucs.separate_multigpu.main(params)
     else:
         demucs.separate.main(params)
-
 
 if __name__ == "__main__":
     main()
