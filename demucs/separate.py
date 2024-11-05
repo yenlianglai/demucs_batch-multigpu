@@ -189,7 +189,7 @@ def save_audio_to_s3(wav_tensor, s3_client, bucket, key, **kwargs):
     ta.save(
         buffer,
         wav_tensor,
-        format="wav",
+        format=kwargs["format"],
         sample_rate=kwargs["samplerate"],
         bits_per_sample=kwargs["bits_per_sample"],
     )
@@ -204,6 +204,7 @@ def process_and_save_source(
         source = librosa.resample(
             source.detach().cpu().numpy(), orig_sr=samplerate, target_sr=target_sr
         )
+
     save_audio_to_s3(
         th.Tensor(source),
         s3_client=s3_client,
@@ -258,6 +259,7 @@ def main(opts=None):
     )
 
     kwargs = {
+        "format": "mp3" if args.mp3 else "flac" if args.flac else "wav",
         "bitrate": args.mp3_bitrate,
         "preset": args.mp3_preset,
         "clip": args.clip_mode,

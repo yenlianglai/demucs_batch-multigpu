@@ -128,6 +128,7 @@ def load_track(s3_client, bucket_name, key, audio_channels, samplerate):
             # Read the audio using torchaudio from the in-memory data
             wav, sr = ta.load(audio_data)
             wav = convert_audio(wav, sr, samplerate, audio_channels)
+
         except RuntimeError as err:
             errors["torchaudio"] = f"Torchaudio failed to load the file: {err}"
             wav = None
