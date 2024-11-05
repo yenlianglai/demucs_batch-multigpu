@@ -1,14 +1,11 @@
 import os
-import subprocess
-import sys
 from io import BytesIO
 
 import torch as th
 import torchaudio as ta
 from botocore.exceptions import ClientError
-from tqdm import tqdm
 
-from .audio import AudioFile, convert_audio
+from .audio import convert_audio
 
 def get_size_from_s3(s3_client, bucket_name, key):
     """Fetch file size in KB from S3 object metadata."""
