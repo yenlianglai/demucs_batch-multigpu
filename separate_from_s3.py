@@ -10,9 +10,11 @@ def main():
     parser = argparse.ArgumentParser()
 
     # S3-related arguments
-    parser.add_argument("--aws_access_key_id", type=str, help="AWS access key ID")
     parser.add_argument(
-        "--aws_secret_access_key", type=str, help="AWS secret access key"
+        "--aws_access_key_id", type=str, required=True, help="AWS access key ID"
+    )
+    parser.add_argument(
+        "--aws_secret_access_key", type=str, required=True, help="AWS secret access key"
     )
     parser.add_argument("--aws_session_token", type=str, help="AWS session token")
     parser.add_argument(
