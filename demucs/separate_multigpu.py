@@ -6,10 +6,13 @@
 
 import argparse
 import gc
+from io import BytesIO
 from pathlib import Path
 
+import boto3
 import librosa
 import torch as th
+import torchaudio as ta
 from dora.log import fatal
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -17,10 +20,44 @@ from tqdm import tqdm
 from .apply import BagOfModels
 from .apply_multigpu import apply_model
 from .audio import save_audio
-from .data_utils import DemucsDataSet, get_size, load_track
+from .data_utils import DemucsDataSet
 from .htdemucs import HTDemucs
 from .pretrained import ModelLoadingError, add_model_flags, get_model_from_args
 
+def collate_fn(batch):
+    return th.utils.data.dataloader.default_collate(
+        [item for item in batch if item is not None]
+    )
+
+def save_audio_to_s3(wav_tensor, s3_client, bucket, key, **kwargs):
+    """Save an audio Tensor to S3 bucket."""
+    buffer = BytesIO()
+    ta.save(
+        buffer,
+        wav_tensor,
+        format="wav",
+        sample_rate=kwargs["samplerate"],
+        bits_per_sample=kwargs["bits_per_sample"],
+    )
+    buffer.seek(0)
+    s3_client.put_object(Bucket=bucket, Key=key, Body=buffer)
+
+def process_and_save_source(
+    source, s3_client, bucket, key, samplerate, target_sr=None, **kwargs
+):
+    """Resample and save a source to S3."""
+    if target_sr:
+        source = librosa.resample(
+            source.detach().cpu().numpy(), orig_sr=samplerate, target_sr=target_sr
+        )
+    save_audio_to_s3(
+        th.Tensor(source),
+        s3_client=s3_client,
+        bucket=bucket,
+        key=key,
+        samplerate=samplerate,
+        **kwargs,
+    )
 
 def get_parser():
     parser = argparse.ArgumentParser(
@@ -159,7 +196,6 @@ def get_parser():
 
     return parser
 
-
 def main(opts=None):
     parser = get_parser()
     args = parser.parse_args(opts)
@@ -173,81 +209,50 @@ def main(opts=None):
         model = th.nn.DataParallel(model)
         args.device = "cuda"
 
-    max_allowed_segment = float("inf")
-    if isinstance(model, HTDemucs):
-        max_allowed_segment = float(model.module.segment)
-    elif isinstance(model, BagOfModels):
-        max_allowed_segment = model.module.max_allowed_segment
-    if args.segment is not None and args.segment > max_allowed_segment:
-        fatal(
-            "Cannot use a Transformer model with a longer segment "
-            f"than it was trained for. Maximum segment is: {max_allowed_segment}"
-        )
-
-    if isinstance(model, BagOfModels):
-        print(
-            f"Selected model is a bag of {len(model.models)} models. "
-            "You will see that many progress bars per track."
-        )
-
     model.cpu()
     model.eval()
 
-    if args.stem is not None and (
-        args.stem not in model.module.sources and args.stem != "inst"
-    ):
-        fatal(
-            'error: stem "{stem}" is not in selected model. STEM must be one of {sources}.'.format(
-                stem=args.stem, sources=", ".join(model.module.sources)
-            )
-        )
-    out = args.out / args.name
-    if not out.exists():
-        print(
-            f"User must manually create the corresponding model output directory: {args.name} before running the script, \n"
-            + "as mountpoint s3 does not support creat folder operation."
-        )
-        return
+    ext = "mp3" if args.mp3 else "flac" if args.flac else "wav"
 
-    print(f"Separated tracks will be stored in {out.resolve()}")
+    s3_client = boto3.client(
+        "s3",
+        aws_access_key_id=args.aws_access_key_id,
+        aws_secret_access_key=args.aws_secret_access_key,
+        aws_session_token=args.aws_session_token,
+        region_name=args.region,
+    )
 
-    if args.mp3:
-        ext = "mp3"
-    elif args.flac:
-        ext = "flac"
-    else:
-        ext = "wav"
+    dataset = DemucsDataSet(
+        s3_client=s3_client,
+        input_bucket=args.input_bucket,
+        audio_channels=model.audio_channels,
+        samplerate=model.samplerate,
+        output_bucket=args.output_bucket,
+        model_name=args.name,
+        ext=ext,
+        audiolength=args.audiolength,
+        drop_kb=args.drop_kb,
+        song_ids=(
+            set(open(args.song_id_file).read().splitlines())
+            if args.song_id_file
+            else None
+        ),
+    )
+
+    dataloader = DataLoader(
+        dataset,
+        batch_size=args.n_batch,
+        num_workers=args.num_worker,
+        collate_fn=collate_fn,
+    )
 
     kwargs = {
-        "samplerate": model.module.samplerate,
         "bitrate": args.mp3_bitrate,
         "preset": args.mp3_preset,
         "clip": args.clip_mode,
         "as_float": args.float32,
         "bits_per_sample": 24 if args.int24 else 16,
     }
-
-    if args.sample_rate is not None:
-        kwargs["samplerate"] = args.sample_rate
-
-    dataset = DemucsDataSet(
-        args.input_path,
-        model.module.audio_channels,
-        model.module.samplerate,
-        args.out,
-        args.name,
-        ext,
-        args.audiolength,
-        drop_kb=180,
-    )
-    dataloader = DataLoader(
-        dataset,
-        batch_size=args.n_batch,
-        num_workers=args.num_worker,
-        shuffle=False,
-        pin_memory=True,
-        prefetch_factor=2,
-    )
 
     for batch, means, stds, tracks in tqdm(dataloader):
         b_sources = apply_model(
@@ -261,116 +266,50 @@ def main(opts=None):
             num_workers=args.jobs,
             segment=args.segment,
         )
+        for k, sources in enumerate(b_sources):
+            sources = (sources * stds[k]) + means[k]
+            track_basename = Path(tracks[k]).stem
 
-        for k, sources in enumerate(list(b_sources)):
-            sources *= stds[k]
-            sources += means[k]
-            track = Path(tracks[k])
-            print("Saving ", str(track.name))
-            subdir = track.relative_to(Path(args.clone_subdir)).parent
-            if args.stem is None:
-                for source, name in zip(sources, model.module.sources):
-                    stem = (
-                        out
-                        / subdir
-                        / args.filename.format(
-                            track=track.name.rsplit(".", 1)[0],
-                            trackext=track.name.rsplit(".", 1)[-1],
-                            stem=name,
-                            ext=ext,
-                        )
-                    )
-                    stem.parent.mkdir(parents=True, exist_ok=True)
-                    if args.sample_rate is not None:
-                        source = librosa.resample(
-                            source.detach().cpu().numpy(),
-                            orig_sr=model.module.samplerate,
-                            target_sr=args.sample_rate,
-                        )
-                    save_audio(th.Tensor(source), str(stem), **kwargs)
-            elif args.stem == "inst":
-                args.filename = "{track}.{ext}"
+            if args.stem:
                 sources = list(sources)
-                stem = (
-                    out
-                    / subdir
-                    / args.filename.format(
-                        track=track.name.rsplit(".", 1)[0],
-                        trackext=track.name.rsplit(".", 1)[-1],
-                        stem=args.stem,
-                        ext=ext,
-                    )
+                s3_key_main = f"{args.filename.format(track=track_basename, stem=args.stem, ext=ext)}"
+                source_main = sources.pop(model.sources.index(args.stem))
+                process_and_save_source(
+                    source_main,
+                    s3_client,
+                    args.output_bucket,
+                    s3_key_main,
+                    model.samplerate,
+                    args.sample_rate,
+                    **kwargs,
                 )
-                stem.parent.mkdir(parents=True, exist_ok=True)
-                sources.pop(model.module.sources.index("vocals"))
-                # Warning : after poping the stem, selected stem is no longer in the list 'sources'
-                other_stem = th.zeros_like(sources[0])
-                for i in sources:
-                    other_stem += i
-                stem = (
-                    out
-                    / subdir
-                    / args.filename.format(
-                        track=track.name.rsplit(".", 1)[0],
-                        trackext=track.name.rsplit(".", 1)[-1],
-                        stem="no_" + args.stem,
-                        ext=ext,
-                    )
+
+                # Saving other sources as a combined "no_<stem>"
+                other_stem = sum(sources)
+                s3_key_other = f"{args.filename.format(track=track_basename, stem='no_' + args.stem, ext=ext)}"
+                process_and_save_source(
+                    other_stem,
+                    s3_client,
+                    args.output_bucket,
+                    s3_key_other,
+                    model.samplerate,
+                    args.sample_rate,
+                    **kwargs,
                 )
-                stem.parent.mkdir(parents=True, exist_ok=True)
-                if args.sample_rate is not None:
-                    other_stem = librosa.resample(
-                        other_stem.detach().cpu().numpy(),
-                        orig_sr=model.module.samplerate,
-                        target_sr=args.sample_rate,
-                    )
-                save_audio(th.Tensor(other_stem), str(stem), **kwargs)
             else:
-                sources = list(sources)
-                stem = (
-                    out
-                    / subdir
-                    / args.filename.format(
-                        track=track.name.rsplit(".", 1)[0],
-                        trackext=track.name.rsplit(".", 1)[-1],
-                        stem=args.stem,
-                        ext=ext,
+                for source, name in zip(sources, model.sources):
+                    s3_key = f"{args.filename.format(track=track_basename, stem=name, ext=ext)}"
+                    process_and_save_source(
+                        source,
+                        s3_client,
+                        args.output_bucket,
+                        s3_key,
+                        model.samplerate,
+                        args.sample_rate,
+                        **kwargs,
                     )
-                )
-                stem.parent.mkdir(parents=True, exist_ok=True)
-                source = sources.pop(model.module.sources.index(args.stem))
-                if args.sample_rate is not None:
-                    source = librosa.resample(
-                        source.detach().cpu().numpy(),
-                        orig_sr=model.module.samplerate,
-                        target_sr=args.sample_rate,
-                    )
-                save_audio(th.Tensor(source), str(stem), **kwargs)
-                # Warning : after poping the stem, selected stem is no longer in the list 'sources'
-                other_stem = th.zeros_like(sources[0])
-                for i in sources:
-                    other_stem += i
-                stem = (
-                    out
-                    / subdir
-                    / args.filename.format(
-                        track=track.name.rsplit(".", 1)[0],
-                        trackext=track.name.rsplit(".", 1)[-1],
-                        stem="no_" + args.stem,
-                        ext=ext,
-                    )
-                )
-                stem.parent.mkdir(parents=True, exist_ok=True)
-                if args.sample_rate is not None:
-                    other_stem = librosa.resample(
-                        other_stem.detach().cpu().numpy(),
-                        orig_sr=model.module.samplerate,
-                        target_sr=args.sample_rate,
-                    )
-                save_audio(th.Tensor(other_stem), str(stem), **kwargs)
-        del b_sources, sources, other_stem, batch
-        gc.collect()
 
+            gc.collect()
 
 if __name__ == "__main__":
     main()

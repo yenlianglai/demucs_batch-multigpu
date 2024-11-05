@@ -1,9 +1,10 @@
 import argparse
 from pathlib import Path
 
+import torch as th
+
 import demucs.separate
 import demucs.separate_multigpu
-import torch as th
 
 def main():
     parser = argparse.ArgumentParser()
@@ -17,12 +18,10 @@ def main():
     parser.add_argument(
         "--region", type=str, help="AWS region for S3", default="us-east-1"
     )
-    parser.add_argument("input_bucket", type=Path, help="Input S3 bucket")
+    parser.add_argument("--input_bucket", type=str, help="Input S3 bucket")
     parser.add_argument(
-        "-o",
-        "--out_bucket",
-        type=Path,
-        default=Path("separated"),
+        "--output_bucket",
+        type=str,
         help="S3 bucket where to put extracted tracks.",
     )
 
@@ -110,7 +109,7 @@ def main():
     parser.add_argument(
         "-j",
         "--jobs",
-        default=0,
+        default=1,
         type=int,
         help="Number of jobs. This can increase memory usage but will "
         "be much faster when multiple cores are available.",
@@ -180,16 +179,12 @@ def main():
         args.n_batch,
         "-d",
         args.device,
-        "-c",
-        str(args.input_bucket),
         "--mp3-bitrate",
         str(args.mp3_bitrate),
         "--mp3-preset",
         str(args.mp3_preset),
         "-j",
         str(args.jobs),
-        "-o",
-        str(args.out_bucket),
         "-l",
         str(args.audiolength),
         "-sr",
@@ -205,6 +200,10 @@ def main():
         args.aws_session_token,
         "--region",
         args.region,
+        "--output_bucket",
+        str(args.output_bucket),
+        "--input_bucket",
+        str(args.input_bucket),
     ]
 
     if args.mp3:
@@ -223,8 +222,6 @@ def main():
     if args.stem is not None:
         params.append("--two-stems")
         params.append(args.stem)
-
-    params.append(str(args.input_bucket))
 
     if th.cuda.device_count() > 1:
         demucs.separate_multigpu.main(params)
