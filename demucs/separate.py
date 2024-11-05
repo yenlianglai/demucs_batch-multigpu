@@ -16,9 +16,10 @@ from .data_utils import DemucsDataSet
 from .pretrained import ModelLoadingError, add_model_flags, get_model_from_args
 
 def collate_fn(batch):
-    return th.utils.data.dataloader.default_collate(
-        [item for item in batch if item is not None]
-    )
+    batch = [item for item in batch if item is not None]
+    if len(batch) == 0:
+        return [], [], [], []
+    return th.utils.data.dataloader.default_collate(batch)
 
 def get_parser():
     parser = argparse.ArgumentParser(
@@ -265,7 +266,7 @@ def main(opts=None):
     }
 
     for batch, means, stds, tracks in tqdm(dataloader):
-        if len(batch == 0):
+        if len(batch) == 0:
             continue
         b_sources = apply_model(
             model,
