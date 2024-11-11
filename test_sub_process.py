@@ -19,12 +19,6 @@ def main():
         logger.warning("GPU is recommended for this task!")
 
     # S3-related parameters
-    aws_access_key_id = "your_access_key_id"
-    aws_secret_access_key = "your_secret_access_key"
-    aws_session_token = "your_session_token"
-    region = "your_region"
-    your_input_bucket = "your_input_bucket"
-    your_output_bucket = "your_output_bucket"
 
     command = [
         "python3",
@@ -48,20 +42,6 @@ def main():
         "./test_song_ids.txt",
         "--filename",
         "{track}.{stem}.{ext}",
-        "./test_audio",
-        # Add S3-related arguments to the command
-        "--aws_access_key_id",
-        aws_access_key_id,
-        "--aws_secret_access_key",
-        aws_secret_access_key,
-        "--aws_session_token",
-        aws_session_token,
-        "--region",
-        region,
-        "--input_bucket",
-        your_input_bucket,
-        "--out_bucket",
-        your_output_bucket,
     ]
 
     logger.info("Starting the separate source process")

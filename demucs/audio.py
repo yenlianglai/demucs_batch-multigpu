@@ -5,34 +5,56 @@
 # LICENSE file in the root directory of this source tree.
 import json
 import subprocess as sp
+import typing as tp
+from io import BytesIO
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
-import lameenc
 import julius
+import lameenc
 import numpy as np
 import torch
 import torchaudio as ta
-import typing as tp
 
 from .utils import temp_filenames
 
-
 def _read_info(path):
-    stdout_data = sp.check_output([
-        'ffprobe', "-loglevel", "panic",
-        str(path), '-print_format', 'json', '-show_format', '-show_streams'
-    ])
-    return json.loads(stdout_data.decode('utf-8'))
-
+    stdout_data = sp.check_output(
+        [
+            "ffprobe",
+            "-loglevel",
+            "panic",
+            str(path),
+            "-print_format",
+            "json",
+            "-show_format",
+            "-show_streams",
+        ]
+    )
+    return json.loads(stdout_data.decode("utf-8"))
 
 class AudioFile:
     """
     Allows to read audio from any format supported by ffmpeg, as well as resampling or
-    converting to mono on the fly. See :method:`read` for more details.
+    converting to mono on the fly. Accepts both file paths and BytesIO objects.
     """
-    def __init__(self, path: Path):
-        self.path = Path(path)
+
+    def __init__(self, path: tp.Union[Path, BytesIO]):
+        if isinstance(path, BytesIO):
+            # Save BytesIO data to a temporary file for ffmpeg
+            self.temp_file = NamedTemporaryFile(suffix=".aac", delete=False)
+            self.temp_file.write(path.read())
+            self.temp_file.flush()
+            self.path = Path(self.temp_file.name)
+        else:
+            self.temp_file = None
+            self.path = Path(path)
+
         self._info = None
+
+    def __del__(self):
+        if self.temp_file:
+            self.temp_file.close()
 
     def __repr__(self):
         features = [("path", self.path)]
@@ -50,12 +72,13 @@ class AudioFile:
 
     @property
     def duration(self):
-        return float(self.info['format']['duration'])
+        return float(self.info["format"]["duration"])
 
     @property
     def _audio_streams(self):
         return [
-            index for index, stream in enumerate(self.info["streams"])
+            index
+            for index, stream in enumerate(self.info["streams"])
             if stream["codec_type"] == "audio"
         ]
 
@@ -63,38 +86,19 @@ class AudioFile:
         return len(self._audio_streams)
 
     def channels(self, stream=0):
-        return int(self.info['streams'][self._audio_streams[stream]]['channels'])
+        return int(self.info["streams"][self._audio_streams[stream]]["channels"])
 
     def samplerate(self, stream=0):
-        return int(self.info['streams'][self._audio_streams[stream]]['sample_rate'])
+        return int(self.info["streams"][self._audio_streams[stream]]["sample_rate"])
 
-    def read(self,
-             seek_time=None,
-             duration=None,
-             streams=slice(None),
-             samplerate=None,
-             channels=None):
-        """
-        Slightly more efficient implementation than stempeg,
-        in particular, this will extract all stems at once
-        rather than having to loop over one file multiple times
-        for each stream.
-
-        Args:
-            seek_time (float):  seek time in seconds or None if no seeking is needed.
-            duration (float): duration in seconds to extract or None to extract until the end.
-            streams (slice, int or list): streams to extract, can be a single int, a list or
-                a slice. If it is a slice or list, the output will be of size [S, C, T]
-                with S the number of streams, C the number of channels and T the number of samples.
-                If it is an int, the output will be [C, T].
-            samplerate (int): if provided, will resample on the fly. If None, no resampling will
-                be done. Original sampling rate can be obtained with :method:`samplerate`.
-            channels (int): if 1, will convert to mono. We do not rely on ffmpeg for that
-                as ffmpeg automatically scale by +3dB to conserve volume when playing on speakers.
-                See https://sound.stackexchange.com/a/42710.
-                Our definition of mono is simply the average of the two channels. Any other
-                value will be ignored.
-        """
+    def read(
+        self,
+        seek_time=None,
+        duration=None,
+        streams=slice(None),
+        samplerate=None,
+        channels=None,
+    ):
         streams = np.array(range(len(self)))[streams]
         single = not isinstance(streams, np.ndarray)
         if single:
@@ -105,22 +109,24 @@ class AudioFile:
             query_duration = None
         else:
             target_size = int((samplerate or self.samplerate()) * duration)
-            query_duration = float((target_size + 1) / (samplerate or self.samplerate()))
+            query_duration = float(
+                (target_size + 1) / (samplerate or self.samplerate())
+            )
 
         with temp_filenames(len(streams)) as filenames:
-            command = ['ffmpeg', '-y']
-            command += ['-loglevel', 'panic']
+            command = ["ffmpeg", "-y"]
+            command += ["-loglevel", "panic"]
             if seek_time:
-                command += ['-ss', str(seek_time)]
-            command += ['-i', str(self.path)]
+                command += ["-ss", str(seek_time)]
+            command += ["-i", str(self.path)]
             for stream, filename in zip(streams, filenames):
-                command += ['-map', f'0:{self._audio_streams[stream]}']
+                command += ["-map", f"0:{self._audio_streams[stream]}"]
                 if query_duration is not None:
-                    command += ['-t', str(query_duration)]
-                command += ['-threads', '1']
-                command += ['-f', 'f32le']
+                    command += ["-t", str(query_duration)]
+                command += ["-threads", "1"]
+                command += ["-f", "f32le"]
                 if samplerate is not None:
-                    command += ['-ar', str(samplerate)]
+                    command += ["-ar", str(samplerate)]
                 command += [filename]
 
             sp.run(command, check=True)
@@ -138,7 +144,6 @@ class AudioFile:
         if single:
             wav = wav[0]
         return wav
-
 
 def convert_audio_channels(wav, channels=2):
     """Convert audio to the given number of channels."""
@@ -162,15 +167,15 @@ def convert_audio_channels(wav, channels=2):
         wav = wav[..., :channels, :]
     else:
         # Case 4: What is a reasonable choice here?
-        raise ValueError('The audio file has less channels than requested but is not mono.')
+        raise ValueError(
+            "The audio file has less channels than requested but is not mono."
+        )
     return wav
-
 
 def convert_audio(wav, from_samplerate, to_samplerate, channels):
     """Convert audio from a given samplerate to a target one and target number of channels."""
     wav = convert_audio_channels(wav, channels)
     return julius.resample_frac(wav, from_samplerate, to_samplerate)
-
 
 def i16_pcm(wav):
     """Convert audio to 16 bits integer PCM format."""
@@ -179,7 +184,6 @@ def i16_pcm(wav):
     else:
         return wav
 
-
 def f32_pcm(wav):
     """Convert audio to float 32 bits PCM format."""
     if wav.dtype.is_floating_point:
@@ -187,14 +191,12 @@ def f32_pcm(wav):
     else:
         return wav.float() / (2**15 - 1)
 
-
 def as_dtype_pcm(wav, dtype):
     """Convert audio to either f32 pcm or i16 pcm depending on the given dtype."""
     if wav.dtype.is_floating_point:
         return f32_pcm(wav)
     else:
         return i16_pcm(wav)
-
 
 def encode_mp3(wav, path, samplerate=44100, bitrate=320, quality=2, verbose=False):
     """Save given audio as mp3. This should work on all OSes."""
@@ -214,33 +216,33 @@ def encode_mp3(wav, path, samplerate=44100, bitrate=320, quality=2, verbose=Fals
     with open(path, "wb") as f:
         f.write(mp3_data)
 
-
-def prevent_clip(wav, mode='rescale'):
+def prevent_clip(wav, mode="rescale"):
     """
     different strategies for avoiding raw clipping.
     """
-    if mode is None or mode == 'none':
+    if mode is None or mode == "none":
         return wav
     assert wav.dtype.is_floating_point, "too late for clipping"
-    if mode == 'rescale':
+    if mode == "rescale":
         wav = wav / max(1.01 * wav.abs().max(), 1)
-    elif mode == 'clamp':
+    elif mode == "clamp":
         wav = wav.clamp(-0.99, 0.99)
-    elif mode == 'tanh':
+    elif mode == "tanh":
         wav = torch.tanh(wav)
     else:
         raise ValueError(f"Invalid mode {mode}")
     return wav
 
-
-def save_audio(wav: torch.Tensor,
-               path: tp.Union[str, Path],
-               samplerate: int,
-               bitrate: int = 320,
-               clip: tp.Literal["rescale", "clamp", "tanh", "none"] = 'rescale',
-               bits_per_sample: tp.Literal[16, 24, 32] = 16,
-               as_float: bool = False,
-               preset: tp.Literal[2, 3, 4, 5, 6, 7] = 2):
+def save_audio(
+    wav: torch.Tensor,
+    path: tp.Union[str, Path],
+    samplerate: int,
+    bitrate: int = 320,
+    clip: tp.Literal["rescale", "clamp", "tanh", "none"] = "rescale",
+    bits_per_sample: tp.Literal[16, 24, 32] = 16,
+    as_float: bool = False,
+    preset: tp.Literal[2, 3, 4, 5, 6, 7] = 2,
+):
     """Save audio file, automatically preventing clipping if necessary
     based on the given `clip` strategy. If the path ends in `.mp3`, this
     will save as mp3 with the given `bitrate`. Use `preset` to set mp3 quality:
@@ -254,11 +256,16 @@ def save_audio(wav: torch.Tensor,
     elif suffix == ".wav":
         if as_float:
             bits_per_sample = 32
-            encoding = 'PCM_F'
+            encoding = "PCM_F"
         else:
-            encoding = 'PCM_S'
-        ta.save(str(path), wav, sample_rate=samplerate,
-                encoding=encoding, bits_per_sample=bits_per_sample)
+            encoding = "PCM_S"
+        ta.save(
+            str(path),
+            wav,
+            sample_rate=samplerate,
+            encoding=encoding,
+            bits_per_sample=bits_per_sample,
+        )
     elif suffix == ".flac":
         ta.save(str(path), wav, sample_rate=samplerate, bits_per_sample=bits_per_sample)
     else:
