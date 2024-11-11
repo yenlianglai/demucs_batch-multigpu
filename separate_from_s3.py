@@ -1,7 +1,7 @@
 import argparse
 from pathlib import Path
 
-import torch as th
+import torch
 
 import demucs.separate
 import demucs.separate_multigpu
@@ -50,7 +50,7 @@ def main():
     parser.add_argument(
         "-d",
         "--device",
-        default="cuda" if th.cuda.is_available() else "cpu",
+        default="cuda" if torch.cuda.is_available() else "cpu",
         help="Device to use, default is cuda if available else cpu",
     )
     parser.add_argument(
@@ -225,7 +225,7 @@ def main():
         params.append("--two-stems")
         params.append(args.stem)
 
-    if th.cuda.device_count() > 1:
+    if torch.cuda.device_count() > 1:
         demucs.separate_multigpu.main(params)
     else:
         demucs.separate.main(params)
