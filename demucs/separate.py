@@ -16,7 +16,7 @@ from tqdm import tqdm
 import boto3
 from .apply import BagOfModels, apply_model
 from .audio import save_audio
-from .data_utils import DemucsDataSet, get_size, load_track
+from .data_utils import DemucsDataSet
 from .htdemucs import HTDemucs
 from .pretrained import ModelLoadingError, add_model_flags, get_model_from_args
 

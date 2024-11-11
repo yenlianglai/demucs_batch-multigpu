@@ -7,35 +7,43 @@
 import argparse
 import gc
 from pathlib import Path
-
+import boto3
 import librosa
 import torch as th
 from dora.log import fatal
+from .data_utils import DemucsDataSet
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from .apply import BagOfModels
 from .apply_multigpu import apply_model
 from .audio import save_audio
-from .data_utils import DemucsDataSet, get_size, load_track
 from .htdemucs import HTDemucs
 from .pretrained import ModelLoadingError, add_model_flags, get_model_from_args
-
 
 def get_parser():
     parser = argparse.ArgumentParser(
         "demucs.separate", description="Separate the sources for the given tracks"
     )
-    parser.add_argument("input_path", type=Path, help="Path to tracks")
     add_model_flags(parser)
     parser.add_argument("-v", "--verbose", action="store_true")
+
+    # S3-related arguments
+    parser.add_argument("--aws_access_key_id", type=str, help="AWS access key ID")
+    parser.add_argument(
+        "--aws_secret_access_key", type=str, help="AWS secret access key"
+    )
+    parser.add_argument("--aws_session_token", type=str, help="AWS session token")
+    parser.add_argument(
+        "--region", type=str, help="AWS region for S3", default="us-east-1"
+    )
+    parser.add_argument("input_bucket", type=Path, help="Input S3 bucket")
     parser.add_argument(
         "-o",
-        "--out",
+        "--out_bucket",
         type=Path,
         default=Path("separated"),
-        help="Folder where to put extracted tracks. A subfolder "
-        "with the model name will be created.",
+        help="S3 bucket where to put extracted tracks.",
     )
     parser.add_argument(
         "--filename",
@@ -142,7 +150,7 @@ def get_parser():
     parser.add_argument(
         "-j",
         "--jobs",
-        default=64,
+        default=0,
         type=int,
         help="Number of jobs. This can increase memory usage but will "
         "be much faster when multiple cores are available.",
@@ -157,8 +165,14 @@ def get_parser():
         "--num_worker", default=8, type=int, help="num_worker for DataLoader"
     )
 
-    return parser
+    parser.add_argument(
+        "--song_id_file",
+        default=None,
+        type=Path,
+        help="File containing song ids to separate. If not provided, all songs in the input directory will be separated.",
+    )
 
+    return parser
 
 def main(opts=None):
     parser = get_parser()
@@ -194,11 +208,11 @@ def main(opts=None):
     model.eval()
 
     if args.stem is not None and (
-        args.stem not in model.module.sources and args.stem != "inst"
+        args.stem not in model.sources and args.stem != "inst"
     ):
         fatal(
             'error: stem "{stem}" is not in selected model. STEM must be one of {sources}.'.format(
-                stem=args.stem, sources=", ".join(model.module.sources)
+                stem=args.stem, sources=", ".join(model.sources)
             )
         )
     out = args.out / args.name
@@ -230,16 +244,34 @@ def main(opts=None):
     if args.sample_rate is not None:
         kwargs["samplerate"] = args.sample_rate
 
-    dataset = DemucsDataSet(
-        args.input_path,
-        model.module.audio_channels,
-        model.module.samplerate,
-        args.out,
-        args.name,
-        ext,
-        args.audiolength,
-        drop_kb=180,
+    song_ids = []
+    with open(args.song_id_file, "r") as f:
+        for line in f:
+            song_ids.append(line.strip())
+
+    print(f"Number of song ids to separate: {len(song_ids)}")
+
+    s3_client = boto3.client(
+        "s3",
+        aws_access_key_id=args.aws_access_key_id,
+        aws_secret_access_key=args.aws_secret_access_key,
+        aws_session_token=args.aws_session_token,
+        region_name=args.region,
     )
+
+    dataset = DemucsDataSet(
+        s3_client=s3_client,
+        input_bucket=args.input_bucket,
+        audio_channels=model.audio_channels,
+        samplerate=model.samplerate,
+        output_bucket=args.out_bucket,
+        model_name=args.name,
+        ext=ext,
+        audiolength=args.audiolength,
+        drop_kb=180,
+        song_ids=set(song_ids),
+    )
+
     dataloader = DataLoader(
         dataset,
         batch_size=args.n_batch,
@@ -269,7 +301,7 @@ def main(opts=None):
             print("Saving ", str(track.name))
             subdir = track.relative_to(Path(args.clone_subdir)).parent
             if args.stem is None:
-                for source, name in zip(sources, model.module.sources):
+                for source, name in zip(sources, model.sources):
                     stem = (
                         out
                         / subdir
@@ -284,7 +316,7 @@ def main(opts=None):
                     if args.sample_rate is not None:
                         source = librosa.resample(
                             source.detach().cpu().numpy(),
-                            orig_sr=model.module.samplerate,
+                            orig_sr=model.samplerate,
                             target_sr=args.sample_rate,
                         )
                     save_audio(th.Tensor(source), str(stem), **kwargs)
@@ -302,7 +334,7 @@ def main(opts=None):
                     )
                 )
                 stem.parent.mkdir(parents=True, exist_ok=True)
-                sources.pop(model.module.sources.index("vocals"))
+                sources.pop(model.sources.index("vocals"))
                 # Warning : after poping the stem, selected stem is no longer in the list 'sources'
                 other_stem = th.zeros_like(sources[0])
                 for i in sources:
@@ -321,7 +353,7 @@ def main(opts=None):
                 if args.sample_rate is not None:
                     other_stem = librosa.resample(
                         other_stem.detach().cpu().numpy(),
-                        orig_sr=model.module.samplerate,
+                        orig_sr=model.samplerate,
                         target_sr=args.sample_rate,
                     )
                 save_audio(th.Tensor(other_stem), str(stem), **kwargs)
@@ -338,11 +370,11 @@ def main(opts=None):
                     )
                 )
                 stem.parent.mkdir(parents=True, exist_ok=True)
-                source = sources.pop(model.module.sources.index(args.stem))
+                source = sources.pop(model.sources.index(args.stem))
                 if args.sample_rate is not None:
                     source = librosa.resample(
                         source.detach().cpu().numpy(),
-                        orig_sr=model.module.samplerate,
+                        orig_sr=model.samplerate,
                         target_sr=args.sample_rate,
                     )
                 save_audio(th.Tensor(source), str(stem), **kwargs)
@@ -364,13 +396,12 @@ def main(opts=None):
                 if args.sample_rate is not None:
                     other_stem = librosa.resample(
                         other_stem.detach().cpu().numpy(),
-                        orig_sr=model.module.samplerate,
+                        orig_sr=model.samplerate,
                         target_sr=args.sample_rate,
                     )
                 save_audio(th.Tensor(other_stem), str(stem), **kwargs)
         del b_sources, sources, other_stem, batch
         gc.collect()
-
 
 if __name__ == "__main__":
     main()

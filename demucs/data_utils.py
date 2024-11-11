@@ -3,7 +3,6 @@ import subprocess
 import sys
 import torch as th
 import torchaudio as ta
-from tqdm import tqdm
 from io import BytesIO
 from .audio import AudioFile, convert_audio
 
